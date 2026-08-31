@@ -1,0 +1,211 @@
+#!/usr/bin/env python3
+"""Render a weekly-events Slack announcement image from a CSV file."""
+
+from __future__ import annotations
+
+import argparse
+import csv
+import sys
+from dataclasses import dataclass
+from pathlib import Path
+
+from PIL import Image, ImageDraw, ImageFont
+
+# TODO: dynamic sizing based on amount of events. Always a minimum size.
+CANVAS_SIZE = (1200, 1800)
+BACKGROUND = "#F8F8F6"
+INK = "#111111"
+LIGHT_INK = "#555555"
+RULE = "#B9B9B7"
+EVENT_RULE = "#D9D9D7"
+LEFT = 86
+RIGHT = CANVAS_SIZE[0] - LEFT
+
+# Fonts in git-ignored directory
+FONT_DIR = Path(__file__).parent / "fonts"
+REGULAR_FONT = FONT_DIR / "IBMPlexSans-Regular.ttf"
+BOLD_FONT = FONT_DIR / "IBMPlexSans-SemiBold.ttf"
+BLACK_FONT = FONT_DIR / "IBMPlexSans-Bold.ttf"
+REQUIRED_COLUMNS = {"title", "day", "time", "location"}
+
+
+@dataclass(frozen=True)
+class Event:
+    title: str
+    day: str
+    time: str
+    location: str
+
+
+def read_events(path: Path) -> list[Event]:
+    """Read and validate a CSV while preserving the row order."""
+    try:
+        with path.open(newline="", encoding="utf-8-sig") as csv_file:
+            reader = csv.DictReader(csv_file)
+            headers = set(reader.fieldnames or [])
+            missing = REQUIRED_COLUMNS - headers
+            if missing:
+                names = ", ".join(sorted(missing))
+                raise ValueError(f"CSV is missing required column(s): {names}")
+
+            events = []
+            for row_number, row in enumerate(reader, start=2):
+                event = Event(
+                    title=(row["title"] or "").strip(),
+                    day=(row["day"] or "").strip(),
+                    time=(row["time"] or "").strip(),
+                    location=(row["location"] or "").strip(),
+                )
+                if not all((event.title, event.day, event.time, event.location)):
+                    raise ValueError(
+                        f"Row {row_number} needs a title, day, time, and location."
+                    )
+                events.append(event)
+    except FileNotFoundError as error:
+        raise ValueError(f"CSV file not found: {path}") from error
+
+    if not events:
+        raise ValueError("CSV has no event rows.")
+    return events
+
+
+def font(path: Path, size: int) -> ImageFont.FreeTypeFont:
+    if not path.exists():
+        raise RuntimeError(
+            f"Required font file is missing: {path.name}. "
+            "Restore the files in the fonts directory."
+        )
+    return ImageFont.truetype(path, size)
+
+
+def text_width(
+    draw: ImageDraw.ImageDraw, text: str, text_font: ImageFont.FreeTypeFont
+) -> int:
+    return int(draw.textbbox((0, 0), text, font=text_font)[2])
+
+
+def fitted_font(
+    draw: ImageDraw.ImageDraw, text: str, font_path: Path, max_size: int, max_width: int
+) -> ImageFont.FreeTypeFont:
+    """Shrink one line of text only when it would overlap its neighbouring column."""
+    for size in range(max_size, 19, -1):
+        candidate = font(font_path, size)
+        if text_width(draw, text, candidate) <= max_width:
+            return candidate
+    return font(font_path, 20)
+
+
+def draw_rule(draw: ImageDraw.ImageDraw, y: int) -> None:
+    draw.line((LEFT - 18, y, RIGHT + 18, y), fill=RULE, width=2)
+
+# TODO: make title more stylized
+def draw_title(draw: ImageDraw.ImageDraw, heading: str, y: int) -> int:
+    heading_font = font(BLACK_FONT, 70)
+    draw.text((LEFT, y), heading, font=heading_font, fill=INK)
+    return y + 140
+
+
+def draw_section_heading(draw: ImageDraw.ImageDraw, heading: str, y: int) -> int:
+    draw_rule(draw, y)
+    heading_font = font(BLACK_FONT, 41)
+    width = text_width(draw, heading, heading_font)
+    draw.text(((CANVAS_SIZE[0] - width) / 2, y + 29), heading, font=heading_font, fill=INK)
+    return y + 112
+
+
+def draw_sunday_events(draw: ImageDraw.ImageDraw, events: list[Event], y: int) -> int:
+    for index, event in enumerate(events):
+        details = f"{event.time}  •  {event.location}"
+        detail_font = fitted_font(draw, details, REGULAR_FONT, 38, 480)
+        detail_width = text_width(draw, details, detail_font)
+        title_max_width = RIGHT - LEFT - detail_width - 38
+        title_font = fitted_font(draw, event.title, BOLD_FONT, 52, title_max_width)
+
+        # TODO: AM and PM are smaller font for stylizing
+        draw.text((LEFT, y), event.title, font=title_font, fill=INK)
+        draw.text((RIGHT - detail_width, y + 7), details, font=detail_font, fill=LIGHT_INK)
+
+        y += 115
+        if index != len(events) - 1:
+            draw.line((LEFT, y - 22, RIGHT, y - 22), fill=EVENT_RULE, width=2)
+    return y
+
+
+def draw_weekday_events(draw: ImageDraw.ImageDraw, events: list[Event], y: int) -> int:
+    for index, event in enumerate(events):
+        title_font = fitted_font(draw, event.title, BOLD_FONT, 48, RIGHT - LEFT)
+        draw.text((LEFT, y), event.title, font=title_font, fill=INK)
+
+        # TODO: AM and PM are smaller font for stylizing
+        detail = f"{event.day}, {event.time}  •  {event.location}"
+        detail_font = fitted_font(draw, detail, REGULAR_FONT, 38, RIGHT - LEFT)
+        draw.text((LEFT, y + 70), detail, font=detail_font, fill=LIGHT_INK)
+
+        y += 155
+        if index != len(events) - 1:
+            draw.line((LEFT + 5, y - 8, LEFT + 555, y - 8), fill=EVENT_RULE, width=2)
+            y += 15
+    return y
+
+
+def render(events: list[Event]) -> Image.Image:
+    image = Image.new("RGB", CANVAS_SIZE, BACKGROUND)
+    draw = ImageDraw.Draw(image)
+
+    sunday_events = [event for event in events if event.day.casefold() == "sunday"]
+    weekday_events = [event for event in events if event.day.casefold() != "sunday"]
+
+    if not weekday_events or not sunday_events:
+        raise ValueError("Include at least one Sunday event and one non-Sunday event.")
+
+    # TODO: Non-hard coded date that is determined by CSV file name
+    y = draw_title(draw, "Week of 08/30: Welcome Week!", 85)
+    y = draw_section_heading(draw, "SUNDAY", y)
+    y = draw_sunday_events(draw, sunday_events, y)
+    y = draw_section_heading(draw, "DURING THE WEEK", y)
+    final_y = draw_weekday_events(draw, weekday_events, y)
+
+    # TODO: Note at bottom, about adding events
+
+    # if final_y > CANVAS_SIZE[1] - 80:
+    #     raise ValueError(
+    #         "There are too many events for this fixed portrait layout. "
+    #         "Remove an event or reduce the layout spacing in generate.py."
+    #     )
+    return image
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(
+        description="Create a Slack-ready weekly events PNG from a CSV file."
+    )
+    parser.add_argument(
+        "--csv",
+        type=Path,
+        default=Path("template.csv"),
+        help="CSV with title, day, time, and location columns",
+    )
+    parser.add_argument(
+        "--output",
+        "-o",
+        type=Path,
+        # TODO: Output file is based on the CSV template file name
+        default=Path("output/weekly-events.png"),
+        help="Output PNG path (default: output/weekly-events.png)",
+    )
+    args = parser.parse_args()
+
+    try:
+        image = render(read_events(args.csv))
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        image.save(args.output, format="PNG", optimize=True)
+    except (RuntimeError, ValueError) as error:
+        print(f"Error: {error}", file=sys.stderr)
+        return 1
+
+    print(f"Created {args.output}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
