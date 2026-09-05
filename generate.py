@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import argparse
 import csv
+from datetime import datetime
+import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -95,14 +97,23 @@ def fitted_font(
     return font(font_path, 20)
 
 
+def spacing_for_font(
+    text_font: ImageFont.FreeTypeFont, reference_size: int, reference_spacing: int
+) -> int:
+    """Scale spacing proportionally from a known-good font size and spacing."""
+    return round(reference_spacing * text_font.size / reference_size)
+
+
 def draw_rule(draw: ImageDraw.ImageDraw, y: int) -> None:
     draw.line((LEFT - 18, y, RIGHT + 18, y), fill=RULE, width=2)
 
 # TODO: make title more stylized
 def draw_title(draw: ImageDraw.ImageDraw, heading: str, y: int) -> int:
-    heading_font = font(BLACK_FONT, 70)
-    draw.text((LEFT, y), heading, font=heading_font, fill=INK)
-    return y + 140
+    max_font_size = 90
+    heading_font = fitted_font(draw, heading, BLACK_FONT, max_font_size, RIGHT - LEFT)
+    width = text_width(draw, heading, heading_font)
+    draw.text(((CANVAS_SIZE[0] - width) / 2, y), heading, font=heading_font, fill=INK)
+    return y + spacing_for_font(heading_font, max_font_size, 155)
 
 
 def draw_section_heading(draw: ImageDraw.ImageDraw, heading: str, y: int) -> int:
@@ -148,7 +159,7 @@ def draw_weekday_events(draw: ImageDraw.ImageDraw, events: list[Event], y: int) 
     return y
 
 
-def render(events: list[Event]) -> Image.Image:
+def render(events: list[Event], heading: str) -> Image.Image:
     image = Image.new("RGB", CANVAS_SIZE, BACKGROUND)
     draw = ImageDraw.Draw(image)
 
@@ -158,8 +169,7 @@ def render(events: list[Event]) -> Image.Image:
     if not weekday_events or not sunday_events:
         raise ValueError("Include at least one Sunday event and one non-Sunday event.")
 
-    # TODO: Non-hard coded date that is determined by CSV file name
-    y = draw_title(draw, "Week of 08/30: Welcome Week!", 85)
+    y = draw_title(draw, heading, 85)
     y = draw_section_heading(draw, "SUNDAY", y)
     y = draw_sunday_events(draw, sunday_events, y)
     y = draw_section_heading(draw, "DURING THE WEEK", y)
@@ -196,7 +206,13 @@ def main() -> int:
     args = parser.parse_args()
 
     try:
-        image = render(read_events(args.csv))
+        match = re.search(r"(?<!\d)(\d{8})(?!\d)", args.csv.stem)
+        if not match:
+            raise ValueError(
+                "CSV filename must include a week date in YYYYMMDD format."
+            )
+        week_date = datetime.strptime(match.group(1), "%Y%m%d")
+        image = render(read_events(args.csv), f"Week of {week_date:%m/%d}")
         args.output.parent.mkdir(parents=True, exist_ok=True)
         image.save(args.output, format="PNG", optimize=True)
     except (RuntimeError, ValueError) as error:
