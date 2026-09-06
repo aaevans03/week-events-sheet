@@ -1,4 +1,4 @@
-title,day,time,location
-Event 1,Sunday,8:30 AM,Campus
-Event 2,Monday,9:00 AM,Home
-Event 3,Wednesday,7:00 PM,Lounge
+title|day|time|location|description
+Event 1|Sunday|8:30 AM|Campus|
+Event 2|Monday|9:00 AM|Home|
+Event 3|Wednesday|7:00 PM|Lounge|

@@ -37,13 +37,17 @@ class Event:
     day: str
     time: str
     location: str
+    description: str = ""
 
 
 def read_events(path: Path) -> list[Event]:
     """Read and validate a CSV while preserving the row order."""
     try:
         with path.open(newline="", encoding="utf-8-sig") as csv_file:
-            reader = csv.DictReader(csv_file)
+            header = csv_file.readline()
+            delimiter = "|" if "|" in header else ","
+            csv_file.seek(0)
+            reader = csv.DictReader(csv_file, delimiter=delimiter)
             headers = set(reader.fieldnames or [])
             missing = REQUIRED_COLUMNS - headers
             if missing:
@@ -57,6 +61,7 @@ def read_events(path: Path) -> list[Event]:
                     day=(row["day"] or "").strip(),
                     time=(row["time"] or "").strip(),
                     location=(row["location"] or "").strip(),
+                    description=(row.get("description") or "").strip(),
                 )
                 if not all((event.title, event.day, event.time, event.location)):
                     raise ValueError(
@@ -152,7 +157,17 @@ def draw_weekday_events(draw: ImageDraw.ImageDraw, events: list[Event], y: int) 
         detail_font = fitted_font(draw, detail, REGULAR_FONT, 38, RIGHT - LEFT)
         draw.text((LEFT, y + 70), detail, font=detail_font, fill=LIGHT_INK)
 
-        y += 155
+        event_height = 155
+        if event.description:
+            description_font = fitted_font(
+                draw, event.description, REGULAR_FONT, 38, RIGHT - LEFT
+            )
+            draw.text(
+                (LEFT, y + 119), event.description, font=description_font, fill=LIGHT_INK
+            )
+            event_height = 205
+
+        y += event_height
         if index != len(events) - 1:
             draw.line((LEFT + 5, y - 8, LEFT + 555, y - 8), fill=EVENT_RULE, width=2)
             y += 15
@@ -193,7 +208,7 @@ def main() -> int:
         "--csv",
         type=Path,
         default=Path("template.csv"),
-        help="CSV with title, day, time, and location columns",
+        help="CSV with title, day, time, and location columns; description is optional",
     )
     parser.add_argument(
         "--output",
