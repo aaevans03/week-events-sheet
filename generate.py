@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Render a weekly-events Slack announcement image from a CSV file."""
+"""
+Render a weekly-events Slack announcement image from a CSV file.
+
+USAGE:
+``python generate.py --csv csv/YYYYMMDD-events.csv -o output/YYYYMMDD-events.png``
+"""
 
 from __future__ import annotations
 
@@ -14,7 +19,7 @@ from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont
 
 # TODO: dynamic sizing based on amount of events. Always a minimum size.
-CANVAS_SIZE = (1200, 1800)
+CANVAS_SIZE = (1200, 2320)
 BACKGROUND = "#F8F8F6"
 INK = "#111111"
 LIGHT_INK = "#555555"
@@ -28,7 +33,7 @@ FONT_DIR = Path(__file__).parent / "fonts"
 REGULAR_FONT = FONT_DIR / "IBMPlexSans-Regular.ttf"
 BOLD_FONT = FONT_DIR / "IBMPlexSans-SemiBold.ttf"
 BLACK_FONT = FONT_DIR / "IBMPlexSans-Bold.ttf"
-REQUIRED_COLUMNS = {"title", "day", "time", "location"}
+REQUIRED_COLUMNS = {"title", "day", "location"}
 
 
 @dataclass(frozen=True)
@@ -59,13 +64,13 @@ def read_events(path: Path) -> list[Event]:
                 event = Event(
                     title=(row["title"] or "").strip(),
                     day=(row["day"] or "").strip(),
-                    time=(row["time"] or "").strip(),
+                    time=(row.get("time") or "").strip(),
                     location=(row["location"] or "").strip(),
                     description=(row.get("description") or "").strip(),
                 )
-                if not all((event.title, event.day, event.time, event.location)):
+                if not all((event.title, event.day, event.location)):
                     raise ValueError(
-                        f"Row {row_number} needs a title, day, time, and location."
+                        f"Row {row_number} needs a title, day, and location. Time is also preferred"
                     )
                 events.append(event)
     except FileNotFoundError as error:
@@ -131,7 +136,11 @@ def draw_section_heading(draw: ImageDraw.ImageDraw, heading: str, y: int) -> int
 
 def draw_sunday_events(draw: ImageDraw.ImageDraw, events: list[Event], y: int) -> int:
     for index, event in enumerate(events):
-        details = f"{event.time}  •  {event.location}"
+        details = (
+            f"{event.time}  •  {event.location}"
+            if event.time
+            else event.location
+        )
         detail_font = fitted_font(draw, details, REGULAR_FONT, 38, 480)
         detail_width = text_width(draw, details, detail_font)
         title_max_width = RIGHT - LEFT - detail_width - 38
@@ -141,7 +150,18 @@ def draw_sunday_events(draw: ImageDraw.ImageDraw, events: list[Event], y: int) -
         draw.text((LEFT, y), event.title, font=title_font, fill=INK)
         draw.text((RIGHT - detail_width, y + 7), details, font=detail_font, fill=LIGHT_INK)
 
-        y += 115
+        # TODO: refactor so description text is a shared helper
+        event_height = 115
+        if event.description:
+            description_font = fitted_font(
+                draw, event.description, REGULAR_FONT, 34, RIGHT - LEFT
+            )
+            draw.text(
+                (LEFT, y + 65), event.description, font=description_font, fill=LIGHT_INK
+            )
+            event_height = 165
+
+        y += event_height
         if index != len(events) - 1:
             draw.line((LEFT, y - 22, RIGHT, y - 22), fill=EVENT_RULE, width=2)
     return y
@@ -153,7 +173,11 @@ def draw_weekday_events(draw: ImageDraw.ImageDraw, events: list[Event], y: int) 
         draw.text((LEFT, y), event.title, font=title_font, fill=INK)
 
         # TODO: AM and PM are smaller font for stylizing
-        detail = f"{event.day}, {event.time}  •  {event.location}"
+        detail = (
+            f"{event.day}, {event.time}  •  {event.location}"
+            if event.time
+            else f"{event.day}  •  {event.location}"
+        )
         detail_font = fitted_font(draw, detail, REGULAR_FONT, 38, RIGHT - LEFT)
         draw.text((LEFT, y + 70), detail, font=detail_font, fill=LIGHT_INK)
 
@@ -208,7 +232,7 @@ def main() -> int:
         "--csv",
         type=Path,
         default=Path("template.csv"),
-        help="CSV with title, day, time, and location columns; description is optional",
+        help="CSV with title, day, and location columns; time and description are optional",
     )
     parser.add_argument(
         "--output",
