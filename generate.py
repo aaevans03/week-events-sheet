@@ -210,8 +210,9 @@ def draw_sheet(
 ) -> int:
     """Draw the whole sheet and return the y just below the last event."""
     y = draw_title(draw, heading, TOP_MARGIN)
-    y = draw_section_heading(draw, "SUNDAY", y)
-    y = draw_sunday_events(draw, sunday_events, y)
+    if sunday_events:
+        y = draw_section_heading(draw, "SUNDAY", y)
+        y = draw_sunday_events(draw, sunday_events, y)
     y = draw_section_heading(draw, "DURING THE WEEK", y)
 
     # TODO: Note at bottom, about adding events
@@ -236,8 +237,8 @@ def render(events: list[Event], heading: str) -> Image.Image:
     sunday_events = [event for event in events if event.day.casefold() == "sunday"]
     weekday_events = [event for event in events if event.day.casefold() != "sunday"]
 
-    if not weekday_events or not sunday_events:
-        raise ValueError("Include at least one Sunday event and one non-Sunday event.")
+    if not weekday_events:
+        raise ValueError("Include at least one non-Sunday event.")
 
     height = canvas_height(heading, sunday_events, weekday_events)
     image = Image.new("RGB", (CANVAS_WIDTH, height), BACKGROUND)
