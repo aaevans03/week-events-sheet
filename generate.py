@@ -18,15 +18,19 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
 
-# TODO: dynamic sizing based on amount of events. Always a minimum size.
-CANVAS_SIZE = (1200, 2320)
+# The sheet is a fixed-width column that grows downward to fit its events. At
+# minimum it is a 4:3 portrait photo, the shape Slack previews without cropping.
+CANVAS_WIDTH = 1200
+MIN_CANVAS_HEIGHT = CANVAS_WIDTH * 4 // 3
+TOP_MARGIN = 85
+BOTTOM_MARGIN = 48
 BACKGROUND = "#F8F8F6"
 INK = "#111111"
 LIGHT_INK = "#555555"
 RULE = "#B9B9B7"
 EVENT_RULE = "#D9D9D7"
 LEFT = 86
-RIGHT = CANVAS_SIZE[0] - LEFT
+RIGHT = CANVAS_WIDTH - LEFT
 
 # Fonts in git-ignored directory
 FONT_DIR = Path(__file__).parent / "fonts"
@@ -122,7 +126,7 @@ def draw_title(draw: ImageDraw.ImageDraw, heading: str, y: int) -> int:
     max_font_size = 90
     heading_font = fitted_font(draw, heading, BLACK_FONT, max_font_size, RIGHT - LEFT)
     width = text_width(draw, heading, heading_font)
-    draw.text(((CANVAS_SIZE[0] - width) / 2, y), heading, font=heading_font, fill=INK)
+    draw.text(((CANVAS_WIDTH - width) / 2, y), heading, font=heading_font, fill=INK)
     return y + spacing_for_font(heading_font, max_font_size, 155)
 
 
@@ -130,10 +134,10 @@ def draw_section_heading(draw: ImageDraw.ImageDraw, heading: str, y: int) -> int
     draw_rule(draw, y)
     heading_font = font(BLACK_FONT, 41)
     width = text_width(draw, heading, heading_font)
-    draw.text(((CANVAS_SIZE[0] - width) / 2, y + 29), heading, font=heading_font, fill=INK)
+    draw.text(((CANVAS_WIDTH - width) / 2, y + 29), heading, font=heading_font, fill=INK)
     return y + 112
 
-
+# TODO: The baselines are still a bit wonky
 def draw_sunday_events(draw: ImageDraw.ImageDraw, events: list[Event], y: int) -> int:
     for index, event in enumerate(events):
         details = (
@@ -198,29 +202,46 @@ def draw_weekday_events(draw: ImageDraw.ImageDraw, events: list[Event], y: int) 
     return y
 
 
-def render(events: list[Event], heading: str) -> Image.Image:
-    image = Image.new("RGB", CANVAS_SIZE, BACKGROUND)
-    draw = ImageDraw.Draw(image)
+def draw_sheet(
+    draw: ImageDraw.ImageDraw,
+    heading: str,
+    sunday_events: list[Event],
+    weekday_events: list[Event],
+) -> int:
+    """Draw the whole sheet and return the y just below the last event."""
+    y = draw_title(draw, heading, TOP_MARGIN)
+    y = draw_section_heading(draw, "SUNDAY", y)
+    y = draw_sunday_events(draw, sunday_events, y)
+    y = draw_section_heading(draw, "DURING THE WEEK", y)
 
+    # TODO: Note at bottom, about adding events
+    return draw_weekday_events(draw, weekday_events, y)
+
+
+def canvas_height(
+    heading: str, sunday_events: list[Event], weekday_events: list[Event]
+) -> int:
+    """Measure the sheet by drawing it onto a throwaway one-pixel-tall canvas.
+
+    Pillow clips anything drawn past the edge, so the scratch draw costs nothing
+    but still reports the real bottom. Measuring by drawing keeps the height from
+    drifting out of step with the layout the way a separate calculation would.
+    """
+    scratch = ImageDraw.Draw(Image.new("RGB", (CANVAS_WIDTH, 1)))
+    content_bottom = draw_sheet(scratch, heading, sunday_events, weekday_events)
+    return max(MIN_CANVAS_HEIGHT, content_bottom + BOTTOM_MARGIN)
+
+
+def render(events: list[Event], heading: str) -> Image.Image:
     sunday_events = [event for event in events if event.day.casefold() == "sunday"]
     weekday_events = [event for event in events if event.day.casefold() != "sunday"]
 
     if not weekday_events or not sunday_events:
         raise ValueError("Include at least one Sunday event and one non-Sunday event.")
 
-    y = draw_title(draw, heading, 85)
-    y = draw_section_heading(draw, "SUNDAY", y)
-    y = draw_sunday_events(draw, sunday_events, y)
-    y = draw_section_heading(draw, "DURING THE WEEK", y)
-    final_y = draw_weekday_events(draw, weekday_events, y)
-
-    # TODO: Note at bottom, about adding events
-
-    # if final_y > CANVAS_SIZE[1] - 80:
-    #     raise ValueError(
-    #         "There are too many events for this fixed portrait layout. "
-    #         "Remove an event or reduce the layout spacing in generate.py."
-    #     )
+    height = canvas_height(heading, sunday_events, weekday_events)
+    image = Image.new("RGB", (CANVAS_WIDTH, height), BACKGROUND)
+    draw_sheet(ImageDraw.Draw(image), heading, sunday_events, weekday_events)
     return image
 
 
